@@ -1,0 +1,12 @@
+order_id,customer,amount,currency,updated_at,note
+o1,alice,9.10,USD,2024-01-01 10:00:00,plain
+o2,"multi
+line",10.00,USD,2024-01-02 10:00:00,"note with ""quotes"" and, comma"
+o3,bob,,USD,2024-01-03 10:00:00,empty amount
+o4,carol,2,CNY,2024-02-30 10:00:00,bad date should be isolated
+o5,dave,10.00,USD,2024-01-05 10:00:00,duplicate key older
+o5,dave,10.00,USD,2024-03-05 10:00:00,duplicate key newer
+o6,eve,not-a-number,USD,2024-01-06 10:00:00,bad amount should be isolated
+o7,frank,3.5,USD,2024-01-07 10:00:00,short
+o8,gina,7.25,USD,2024-01-08 10:00:00,trailing fields,extra,oops
+o9,henry,0.01,USD,2024-01-09 10:00:00,ok

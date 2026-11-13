@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSV 清理 · 分块排序与多路归并</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <h1>CSV 清理</h1>
+      <p class="sub">按块排序 + 多路归并，内存不随文件大小增长</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="machine" id="machine" title="运行环境"></span>
+    <button class="icon-btn" id="themeBtn" type="button" title="切换主题">◐</button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar" aria-label="任务列表">
+    <div class="sidebar-head">
+      <h2>任务</h2>
+      <button class="ghost-btn" id="refreshBtn" type="button">刷新</button>
+    </div>
+    <ul class="task-list" id="taskList"></ul>
+    <p class="empty-hint" id="taskEmpty">还没有任务，先在右侧上传一个 CSV。</p>
+  </aside>
+
+  <section class="content">
+    <!-- ---------------------------------------------------------- -->
+    <section class="card" id="newCard">
+      <div class="card-head">
+        <h2>新建清理任务</h2>
+        <span class="muted" id="uploadStatus">选择文件后先预览列名，再设置规则</span>
+      </div>
+
+      <div class="steps">
+        <div class="step" data-step="1">
+          <div class="step-head"><span class="step-num">1</span> 选择文件</div>
+          <div class="drop" id="dropZone" tabindex="0" role="button"
+               aria-label="选择或拖入 CSV 文件">
+            <input type="file" id="fileInput" accept=".csv,.txt,text/csv" hidden>
+            <p class="drop-title">拖入 CSV，或点击选择</p>
+            <p class="muted small">按内容哈希识别文件；同一文件不会重复上传</p>
+            <p class="file-name" id="fileName"></p>
+          </div>
+          <div class="grid-3">
+            <label class="field">编码
+              <select id="encoding">
+                <option value="utf-8">UTF-8（自动识别 BOM）</option>
+                <option value="gbk">GBK</option>
+                <option value="gb18030">GB18030</option>
+                <option value="latin-1">Latin-1</option>
+              </select>
+            </label>
+            <label class="field">分隔符
+              <select id="delimiter">
+                <option value=",">逗号 ,</option>
+                <option value=";">分号 ;</option>
+                <option value="\t">制表符 Tab</option>
+                <option value="|">竖线 |</option>
+              </select>
+            </label>
+            <label class="field">表头
+              <select id="headerMode">
+                <option value="present">首行是表头</option>
+                <option value="absent">没有表头</option>
+                <option value="custom">自定义列名</option>
+              </select>
+            </label>
+          </div>
+          <label class="field" id="customHeaderWrap" hidden>自定义列名（逗号分隔）
+            <input id="customHeader" type="text" placeholder="id,name,amount">
+          </label>
+          <div class="row-actions">
+            <button class="btn" id="inspectBtn" type="button" disabled>预览列与样例行</button>
+            <span class="muted" id="inspectHint"></span>
+          </div>
+          <div class="preview-mini" id="columnPreview" hidden>
+            <div class="chips" id="columnChips"></div>
+            <div class="table-wrap">
+              <table class="data-table" id="sampleTable"></table>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" data-step="2">
+          <div class="step-head"><span class="step-num">2</span> 排序与去重规则</div>
+          <div class="grid-3">
+            <label class="field">排序字段
+              <select id="sortBy"></select>
+            </label>
+            <label class="field">排序方向
+              <select id="sortDir">
+                <option value="asc">升序</option>
+                <option value="desc">降序</option>
+              </select>
+            </label>
+            <label class="field">空值位置
+              <select id="nulls">
+                <option value="last">空值在后</option>
+                <option value="first">空值在前</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid-3">
+            <label class="field">比较方式
+              <select id="sortType">
+                <option value="auto">自动（数字/日期按真实类型）</option>
+                <option value="number">数字 / 金额</option>
+                <option value="date">日期时间</option>
+                <option value="text">文本</option>
+              </select>
+            </label>
+            <label class="field">业务键（去重依据）
+              <input id="businessKey" type="text" placeholder="order_id 或 a|b">
+            </label>
+            <label class="field">更新时间列（可选）
+              <select id="updatedAt"></select>
+            </label>
+          </div>
+          <div class="grid-3">
+            <label class="field">重复记录
+              <select id="dupPolicy">
+                <option value="keep">全部保留</option>
+                <option value="latest">保留更新时间最新的一条</option>
+                <option value="first">保留最早出现的一条</option>
+              </select>
+            </label>
+            <label class="field">块大小（行数上限）
+              <input id="chunkRows" type="number" min="100" step="1000" value="200000">
+            </label>
+            <label class="field">块大小（字节上限）
+              <input id="chunkBytes" type="number" min="65536" step="1048576" value="4194304">
+            </label>
+          </div>
+          <div class="grid-3">
+            <label class="field">归并扇入（同时打开的文件数上限）
+              <input id="fanIn" type="number" min="2" max="256" value="16">
+            </label>
+            <label class="field">任务名称（可选）
+              <input id="taskName" type="text" placeholder="例如：订单表每日清理">
+            </label>
+            <div class="field align-end">
+              <button class="btn primary" id="startBtn" type="button" disabled>开始清理</button>
+            </div>
+          </div>
+          <p class="note" id="ruleNote"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- -->
+    <section class="card" id="taskCard" hidden>
+      <div class="card-head">
+        <div>
+          <h2 id="taskTitle">任务</h2>
+          <span class="muted" id="taskSub"></span>
+        </div>
+        <div class="row-actions">
+          <button class="btn" id="pauseBtn" type="button" hidden>暂停</button>
+          <button class="btn" id="resumeBtn" type="button" hidden>继续</button>
+          <button class="btn danger" id="cancelBtn" type="button" hidden>取消</button>
+          <button class="btn" id="deleteBtn" type="button" hidden>删除任务</button>
+        </div>
+      </div>
+
+      <div class="status-line">
+        <span class="pill" id="statusPill">—</span>
+        <span class="muted" id="stageText"></span>
+        <span class="muted" id="elapsedText"></span>
+      </div>
+      <p class="error-text" id="taskError" hidden></p>
+
+      <div class="meters" id="meters">
+        <div class="meter-block">
+          <div class="meter-head"><span>读取输入</span><span class="meter-val" id="readVal">0%</span></div>
+          <div class="meter" role="progressbar" aria-label="读取输入进度" id="readMeter"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="meter-fill" id="readFill"></div>
+          </div>
+          <div class="meter-foot" id="readFoot">0 B / 0 B · 已读 0 行</div>
+        </div>
+        <div class="meter-block">
+          <div class="meter-head"><span>临时分片</span><span class="meter-val" id="shardVal">0</span></div>
+          <div class="meter" role="progressbar" aria-label="分片进度" id="shardMeter"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="meter-fill" id="shardFill"></div>
+          </div>
+          <div class="meter-foot" id="shardFoot">尚未生成分片</div>
+        </div>
+        <div class="meter-block">
+          <div class="meter-head"><span>归并输出</span><span class="meter-val" id="mergeVal">0%</span></div>
+          <div class="meter" role="progressbar" aria-label="归并进度" id="mergeMeter"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="meter-fill" id="mergeFill"></div>
+          </div>
+          <div class="meter-foot" id="mergeFoot">等待开始</div>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="panes">
+        <div class="pane">
+          <div class="pane-head">
+            <h3>分片明细</h3>
+            <div class="row-actions">
+              <button class="ghost-btn" id="chartViewBtn" type="button" aria-pressed="true">图表</button>
+              <button class="ghost-btn" id="tableViewBtn" type="button" aria-pressed="false">表格</button>
+            </div>
+          </div>
+          <div class="chart" id="shardChart" hidden></div>
+          <div class="table-wrap" id="shardTableWrap">
+            <table class="data-table" id="shardTable">
+              <thead><tr><th>阶段</th><th>分片</th><th class="num">行数</th><th class="num">坏行</th><th class="num">字节</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <p class="empty-hint" id="shardEmpty">任务开始后会显示每个临时分片的行数与大小。</p>
+          </div>
+          <div class="legend" id="shardLegend" hidden></div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-head"><h3>坏行样本</h3><span class="muted small" id="badCountHint"></span></div>
+          <div class="table-wrap">
+            <table class="data-table" id="badTable">
+              <thead><tr><th class="num">起始行</th><th>原因</th><th>原文片段</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <p class="empty-hint" id="badEmpty">没有坏行。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="result" id="resultBlock" hidden>
+        <div class="pane-head">
+          <h3>结果</h3>
+          <div class="row-actions">
+            <input id="searchInput" type="search" placeholder="在结果中搜索…" aria-label="搜索结果">
+            <button class="btn" id="searchBtn" type="button">搜索</button>
+            <a class="btn" id="downloadClean" href="#" role="button">下载清理结果</a>
+            <a class="btn" id="downloadBad" href="#" role="button">下载坏行</a>
+          </div>
+        </div>
+        <div class="table-wrap" id="resultTableWrap">
+          <table class="data-table" id="resultTable"></table>
+        </div>
+        <div class="row-actions pager">
+          <button class="ghost-btn" id="prevPage" type="button">上一页</button>
+          <span class="muted" id="pageInfo"></span>
+          <button class="ghost-btn" id="nextPage" type="button">下一页</button>
+          <span class="muted small" id="searchInfo"></span>
+        </div>
+      </div>
+
+      <details class="raw">
+        <summary>任务信息与临时文件</summary>
+        <pre id="rawJson"></pre>
+      </details>
+    </section>
+
+    <section class="card" id="limitCard" hidden>
+      <div class="card-head"><h2>结果变化</h2></div>
+      <p class="muted">删除或覆盖任务前请先确认下载结果。</p>
+    </section>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
